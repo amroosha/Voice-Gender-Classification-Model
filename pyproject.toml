@@ -23,8 +23,8 @@ dependencies = [
 torch = [{ index = "pytorch-cpu" }]
 torchaudio = [{ index = "pytorch-cpu" }]
 
-[tool.uv]
-environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
+
+
 
 [[tool.uv.index]]
 name = "pytorch-cpu"

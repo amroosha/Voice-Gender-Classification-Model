@@ -3,3 +3,18 @@ __pycache__/
 .venv/
 .pytest_cache/
 .mypy_cache/
+.src/voice_gender_classification_model.egg-info
+.data/*
+
+# Data & Audio files
+data/
+*.wav
+*.mp3
+*.flac
+*.tar.gz
+*.csv
+
+# Hugging Face & Torch caches
+.cache/
+hf_cache/
+

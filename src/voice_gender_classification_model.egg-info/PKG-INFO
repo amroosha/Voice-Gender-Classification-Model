@@ -1,0 +1,162 @@
+Metadata-Version: 2.4
+Name: voice-gender-classification-model
+Version: 0.1.0
+Summary: Production microservice for voice gender classification
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: fastapi>=0.116.1
+Requires-Dist: httpx>=0.28.1
+Requires-Dist: joblib>=1.5.2
+Requires-Dist: matplotlib>=3.10.6
+Requires-Dist: mlflow>=3.3.2
+Requires-Dist: numpy>=2.3.2
+Requires-Dist: python-multipart>=0.0.20
+Requires-Dist: scikit-learn>=1.7.1
+Requires-Dist: torch==2.8.0
+Requires-Dist: torchaudio==2.8.0
+Requires-Dist: transformers>=4.56.0
+Requires-Dist: uvicorn>=0.35.0
+
+# Voice Gender Classification — Production Microservice: Implementation Plan
+
+This is the single source of truth for this project. It exists so implementation can happen
+across multiple future sessions (possibly different models) without losing context. Every
+architectural decision below has already been made and discussed — do not relitigate them
+without a real reason; see Section 6.
+
+## 1. Overview
+
+Goal: replace a legacy, notebook-only voice gender classifier with a complete, production-grade
+microservice — trainable pipeline, tracked experiments, containerized API, live upload-and-test
+endpoint. This is a portfolio piece; "overengineered" is intentional.
+
+Source dataset: [Gender Recognition by Voice (original)](https://www.kaggle.com/datasets/murtadhanajim/gender-recognition-by-voiceoriginal)
+— raw `.wav` files under `data/male/` and `data/female/`, confirmed from the legacy notebook.
+
+## 2. Data
+
+- **Train/validation set:** the larger of two voice datasets. Stratified train/val/test split
+  (fixed seed) or k-fold, depending on size.
+- **OOD test set:** a second, separate, larger dataset, used *only* for out-of-distribution
+  evaluation — never touched during training or model selection. Its job is to measure how much
+  accuracy degrades on conditions the model never saw (different mics, rooms, codecs, accents) —
+  the real test of whether this generalizes past a curated benchmark, not just a demo gimmick.
+- Keep the two physically separate on disk so there's no chance of leakage.
+
+## 3. Architecture decisions
+
+### 3.1 Feature backbone — frozen wav2vec2-base
+- `facebook/wav2vec2-base`, frozen (no fine-tuning), used purely as a feature extractor.
+- Input: mono, 16kHz audio (resampled if needed).
+- Output: mean-pooled hidden states from an **explicit, early-middle transformer layer** — start
+  at layer 6 of 12, not the final layer. Layer-wise probing of wav2vec2/HuBERT-style models
+  consistently shows speaker and prosodic information — pitch, the dominant signal for this task
+  — concentrated in early-to-middle layers, while final layers drift toward phonetic content
+  tuned for the pretraining objective. Exposed as `WAV2VEC2_LAYER` in `config.py` so testing a
+  different layer is a one-line change, not a rewrite.
+- Frozen backbone ⇒ no GPU required anywhere, including training or serving.
+
+### 3.2 Downstream classifier — LogisticRegression
+- `LogisticRegression(class_weight='balanced')` — not LightGBM.
+- Rationale: pitch dominates this task, so the embedding space should already be close to
+  linearly separable. A linear model captures that without a boosted ensemble's overfitting risk
+  on a comparatively small dataset. It's natively interpretable via its coefficients, so no
+  post-hoc explainability layer (e.g. SHAP) is needed.
+- Side effect: LogisticRegression's probabilities are inherently better calibrated than a GBM's,
+  so no separate calibration step is needed before exposing `confidence_score` in the API.
+
+### 3.3 Preprocessing & artifact bundling
+- Scaler + LogisticRegression bundled into a single `sklearn.Pipeline`, serialized as one joblib
+  artifact. One file — no risk of a scaler and classifier from different runs getting mismatched
+  at serve time.
+
+### 3.4 Audio I/O — torchaudio, single standard
+- All decoding (`.wav`, `.mp3`) goes through `torchaudio` (ffmpeg backend) — one code path, not a
+  mix of `soundfile`/`librosa`/`pydub`.
+- Fully in-memory during inference (`io.BytesIO`), no disk writes.
+- Validation before feature extraction: force mono (channel average), resample to 16kHz, reject
+  clips under a minimum duration (default 0.5s — too short for a meaningful embedding), reject on
+  decode failure with HTTP 422.
+- **No heuristic noise reduction.** The legacy notebook denoised every clip by assuming the first
+  0.2s was pure noise — fragile for arbitrary uploads. Raw embeddings from a model trained on real
+  speech replace hand-tuned denoising entirely.
+
+### 3.5 Experiment tracking — MLflow, training-time only
+- MLflow logs hyperparameters, Accuracy/Precision/Recall/F1, confusion matrix plots, and the
+  serialized artifact — during `train.py` runs only.
+- The serving layer never talks to MLflow. Once a run is selected, its artifact is copied into
+  `models/` — the one thing the API loads. Serving stays fully decoupled from the tracking store;
+  no MLflow server needs to run in production.
+
+### 3.6 Serving — FastAPI, decoupled from training
+- Async FastAPI app, versioned endpoint `/v1/predict-gender` + `/health`.
+- Backbone and classifier pipeline load **once**, at startup (FastAPI lifespan event), held in
+  app state — never reloaded per-request.
+- `/v1/predict-gender` accepts `multipart/form-data`, validates in memory, returns predicted
+  label, confidence score, and latency in ms.
+- Training and deployment cycles are fully separate: the API only ever consumes a pre-trained
+  artifact, never triggers training.
+
+### 3.7 Dependency management — uv
+- `pyproject.toml` + `uv.lock`, not a flat `requirements.txt`.
+- CPU-only PyTorch pinned via an extra index in `pyproject.toml` — the backbone is frozen, so
+  nothing in the pipeline needs a CUDA build, and skipping it cuts several GB off the final image.
+- Docker build uses `uv sync --frozen` in a multi-stage build: a builder stage resolves/installs
+  into a venv, a runtime stage (`python:3.11-slim` + `libsndfile1` + `ffmpeg`) copies only the
+  venv and app code. Lean image, reproducible resolution.
+
+### 3.8 Containerization
+- `facebook/wav2vec2-base` is downloaded and pinned to a specific revision **during the Docker
+  build**, not at runtime — the image is self-contained and cold starts don't depend on the
+  Hugging Face Hub being reachable, at the cost of ~400MB extra image size. Worth it for a service
+  meant to be deployable anywhere.
+
+## 4. Testing
+
+- `tests/test_api.py` — integration test (`httpx`) against the live endpoint with real sample
+  audio bytes.
+- `tests/test_audio_utils.py` — unit tests: resampling correctness, mono conversion, minimum-
+  duration rejection.
+- `tests/test_feature_extractor.py` — embedding shape is always `(768,)` regardless of input
+  length; same input produces the same embedding (frozen backbone, eval mode ⇒ deterministic).
+
+## 5. Directory structure
+
+```
+├── data/
+│   ├── train_val/               # primary dataset (male/, female/)
+│   └── ood_test/                 # separate OOD dataset, never used in training
+├── models/                       # bundled preprocessor+classifier artifact, wav2vec2 config
+├── src/
+│   ├── __init__.py
+│   ├── config.py                  # paths, SAMPLE_RATE=16000, WAV2VEC2_MODEL_NAME,
+│   │                                WAV2VEC2_REVISION, WAV2VEC2_LAYER, MIN_AUDIO_DURATION_S, DEVICE
+│   ├── audio_utils.py             # in-memory loading (torchaudio), resampling, mono, validation
+│   ├── feature_extractor.py       # frozen wav2vec2 embedding extraction
+│   └── train.py                   # loads data, extracts/caches embeddings, trains + evaluates,
+│                                     logs to MLflow, runs OOD eval, exports final artifact
+├── app/
+│   ├── __init__.py
+│   ├── main.py                    # FastAPI app, lifespan model loading, /health, /v1/predict-gender
+│   └── schemas.py                  # Pydantic response models
+├── tests/
+│   ├── test_api.py
+│   ├── test_audio_utils.py
+│   └── test_feature_extractor.py
+├── Dockerfile                      # multi-stage, uv-based, python:3.11-slim + libsndfile1 + ffmpeg
+├── pyproject.toml
+├── uv.lock
+└── README.md                       # uv sync, train + mlflow ui, docker build, curl examples
+```
+
+## 6. Decisions already settled — do not relitigate without a real reason
+
+- MLflow is training-only — never a serving dependency.
+- LogisticRegression over LightGBM — interpretability + overfitting risk on a near-linearly-
+  separable embedding space.
+- No classical hand-crafted-feature baseline model — the legacy feature pipeline wasn't correctly
+  preprocessed, so it isn't a fair comparison; the reasoning for embeddings over hand-crafted CSV
+  features is documented in the README, not benchmarked in code.
+- No noise-reduction heuristic anywhere in the audio pipeline.
+- Two physically separate datasets — one for train/val, one exclusively for OOD testing.
+- wav2vec2 backbone is frozen — no fine-tuning, no GPU dependency.

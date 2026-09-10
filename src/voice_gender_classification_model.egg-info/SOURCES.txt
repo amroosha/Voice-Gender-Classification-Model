@@ -1,0 +1,15 @@
+README.md
+pyproject.toml
+src/__init__.py
+src/audio_utils.py
+src/config.py
+src/feature_extractor.py
+src/train.py
+src/voice_gender_classification_model.egg-info/PKG-INFO
+src/voice_gender_classification_model.egg-info/SOURCES.txt
+src/voice_gender_classification_model.egg-info/dependency_links.txt
+src/voice_gender_classification_model.egg-info/requires.txt
+src/voice_gender_classification_model.egg-info/top_level.txt
+tests/test_api.py
+tests/test_audio_utils.py
+tests/test_feature_extractor.py
