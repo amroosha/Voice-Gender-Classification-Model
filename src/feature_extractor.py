@@ -1,10 +1,17 @@
 import numpy as np
 import torch
-from transformers import Wav2Vec2Model, Wav2Vec2Processor
+from transformers import Wav2Vec2Model, Wav2Vec2Processor, Wav2Vec2FeatureExtractor
 
-from src.audio_utils import prepare_audio_bytes
-from src.config import DEVICE, SAMPLE_RATE, WAV2VEC2_LAYER, WAV2VEC2_MODEL_NAME, WAV2VEC2_REVISION
+from audio_utils import prepare_audio_bytes
+from config import DEVICE, SAMPLE_RATE, WAV2VEC2_LAYER, WAV2VEC2_MODEL_NAME, WAV2VEC2_REVISION
 
+feature_extractor = Wav2Vec2FeatureExtractor(
+    feature_size=1,
+    sampling_rate=16000,
+    padding_value=0.0,
+    do_normalize=True,
+    return_attention_mask=False
+)
 
 class Wav2Vec2FeatureExtractor:
     def __init__(
@@ -16,16 +23,28 @@ class Wav2Vec2FeatureExtractor:
         model: Wav2Vec2Model | None = None,
         processor: Wav2Vec2Processor | None = None,
     ) -> None:
+        """
+        
+        """
         self.layer = layer
         self.device = torch.device(device)
-        self.processor = processor or Wav2Vec2Processor.from_pretrained(model_name, revision=revision)
+        self.processor = feature_extractor if processor is None else processor
         self.model = model or Wav2Vec2Model.from_pretrained(model_name, revision=revision)
         self.model.eval()
+
         for parameter in self.model.parameters():
             parameter.requires_grad = False
+
         self.model.to(self.device)
 
     def extract_embedding(self, waveform: torch.Tensor, sample_rate: int = SAMPLE_RATE) -> np.ndarray:
+        """
+        Early-to-middle layers (Layers 4-7): Heavily capture speaker characteristics, fundamental pitch vocal tract resonance, and acoustics.
+        This is why we used layer 6 in our project as it can maintain gender characteristics.
+
+
+        """
+
         if waveform.ndim != 2 or waveform.shape[0] != 1:
             raise ValueError("Expected mono waveform shape [1, samples]")
         if sample_rate != SAMPLE_RATE:
@@ -36,6 +55,7 @@ class Wav2Vec2FeatureExtractor:
             sampling_rate=sample_rate,
             return_tensors="pt",
         )
+
         with torch.no_grad():
             outputs = self.model(
                 input_values=inputs.input_values.to(self.device),
@@ -44,8 +64,8 @@ class Wav2Vec2FeatureExtractor:
                 else None,
                 output_hidden_states=True,
             )
-        hidden_state = outputs.hidden_states[self.layer]
-        embedding = hidden_state.mean(dim=1).squeeze(0).cpu().numpy()
+        hidden_state = outputs.hidden_states[self.layer] # Shape: [1, time_steps, 768]
+        embedding = hidden_state.mean(dim=1).squeeze(0).cpu().numpy() # Shape: [768]
         return embedding
 
     def extract_from_bytes(self, audio_bytes: bytes) -> np.ndarray:

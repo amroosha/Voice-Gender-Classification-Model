@@ -16,3 +16,5 @@ WAV2VEC2_REVISION = "main"
 WAV2VEC2_LAYER = 6
 
 DEVICE = "cpu"
+
+
