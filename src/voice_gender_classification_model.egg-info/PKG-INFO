@@ -4,6 +4,7 @@ Version: 0.1.0
 Summary: Production microservice for voice gender classification
 Requires-Python: >=3.11
 Description-Content-Type: text/markdown
+Requires-Dist: datasets>=5.0.1
 Requires-Dist: fastapi>=0.116.1
 Requires-Dist: httpx>=0.28.1
 Requires-Dist: joblib>=1.5.2

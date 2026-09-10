@@ -1,17 +1,11 @@
+from pathlib import Path
 import numpy as np
 import torch
-from transformers import Wav2Vec2Model, Wav2Vec2Processor, Wav2Vec2FeatureExtractor
 
+from transformers import Wav2Vec2Model, Wav2Vec2Processor
 from audio_utils import prepare_audio_bytes
 from config import DEVICE, SAMPLE_RATE, WAV2VEC2_LAYER, WAV2VEC2_MODEL_NAME, WAV2VEC2_REVISION
 
-feature_extractor = Wav2Vec2FeatureExtractor(
-    feature_size=1,
-    sampling_rate=16000,
-    padding_value=0.0,
-    do_normalize=True,
-    return_attention_mask=False
-)
 
 class Wav2Vec2FeatureExtractor:
     def __init__(
@@ -23,13 +17,15 @@ class Wav2Vec2FeatureExtractor:
         model: Wav2Vec2Model | None = None,
         processor: Wav2Vec2Processor | None = None,
     ) -> None:
-        """
-        
-        """
         self.layer = layer
         self.device = torch.device(device)
-        self.processor = feature_extractor if processor is None else processor
-        self.model = model or Wav2Vec2Model.from_pretrained(model_name, revision=revision)
+
+        # If model_name is a local directory, load completely offline
+        is_local = Path(model_name).exists()
+        load_kwargs = {"local_files_only": True} if is_local else {"revision": revision}
+
+        self.processor = processor or Wav2Vec2Processor.from_pretrained(model_name, **load_kwargs)
+        self.model = model or Wav2Vec2Model.from_pretrained(model_name, **load_kwargs)
         self.model.eval()
 
         for parameter in self.model.parameters():
@@ -41,8 +37,6 @@ class Wav2Vec2FeatureExtractor:
         """
         Early-to-middle layers (Layers 4-7): Heavily capture speaker characteristics, fundamental pitch vocal tract resonance, and acoustics.
         This is why we used layer 6 in our project as it can maintain gender characteristics.
-
-
         """
 
         if waveform.ndim != 2 or waveform.shape[0] != 1:

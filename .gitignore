@@ -5,6 +5,7 @@ __pycache__/
 .mypy_cache/
 .src/voice_gender_classification_model.egg-info
 .data/*
+.models/*
 
 # Data & Audio files
 data/

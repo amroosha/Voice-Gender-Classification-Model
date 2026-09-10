@@ -5,6 +5,7 @@ description = "Production microservice for voice gender classification"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+  "datasets>=5.0.1",
   "fastapi>=0.116.1",
   "httpx>=0.28.1",
   "joblib>=1.5.2",
@@ -33,6 +34,7 @@ explicit = true
 
 [dependency-groups]
 dev = [
+  "datasets>=5.0.1",
   "pytest>=8.4.2",
 ]
 
