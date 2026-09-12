@@ -5,6 +5,9 @@ import torchaudio
 
 from src.config import MIN_AUDIO_DURATION_S, SAMPLE_RATE
 
+# torchaudio logs a warning about torchaudio.load() some parameters will be ignored we don't pass any of these paramters anyway, so we can ignore this warning
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="torchaudio")
 
 class AudioValidationError(ValueError):
     pass
