@@ -13,8 +13,10 @@ Requires-Dist: mlflow>=3.3.2
 Requires-Dist: numpy>=2.3.2
 Requires-Dist: python-multipart>=0.0.20
 Requires-Dist: scikit-learn>=1.7.1
+Requires-Dist: soundfile>=0.14.0
 Requires-Dist: torch==2.8.0
 Requires-Dist: torchaudio==2.8.0
+Requires-Dist: tqdm>=4.66.0
 Requires-Dist: transformers>=4.56.0
 Requires-Dist: uvicorn>=0.35.0
 
@@ -126,31 +128,71 @@ Source dataset: [Gender Recognition by Voice (original)](https://www.kaggle.com/
 ```
 ├── data/
 │   ├── train_val/               # primary dataset (male/, female/)
-│   └── ood_test/                 # separate OOD dataset, never used in training
-├── models/                       # bundled preprocessor+classifier artifact, wav2vec2 config
+│   └── ood_test/                # separate OOD dataset (FLEURS test split)
+├── models/
+│   ├── wav2vec2-base/           # offline Wav2Vec2 backbone weights & configs
+│   ├── gender_classifier.joblib # trained downstream pipeline artifact
+│   ├── gender_classifier.json   # class labels metadata
+│   └── README.md                # models directory documentation
 ├── src/
 │   ├── __init__.py
-│   ├── config.py                  # paths, SAMPLE_RATE=16000, WAV2VEC2_MODEL_NAME,
-│   │                                WAV2VEC2_REVISION, WAV2VEC2_LAYER, MIN_AUDIO_DURATION_S, DEVICE
-│   ├── audio_utils.py             # in-memory loading (torchaudio), resampling, mono, validation
-│   ├── feature_extractor.py       # frozen wav2vec2 embedding extraction
-│   └── train.py                   # loads data, extracts/caches embeddings, trains + evaluates,
-│                                     logs to MLflow, runs OOD eval, exports final artifact
+│   ├── config.py                # paths, SAMPLE_RATE, offline model resolution
+│   ├── audio_utils.py           # in-memory torchaudio loading, mono, resampling
+│   ├── feature_extractor.py     # offline Layer 6 embedding extraction
+│   └── train.py                 # train + eval + MLflow experiment tracking
 ├── app/
 │   ├── __init__.py
-│   ├── main.py                    # FastAPI app, lifespan model loading, /health, /v1/predict-gender
-│   └── schemas.py                  # Pydantic response models
+│   ├── main.py                  # FastAPI app (/health, /v1/predict-gender)
+│   └── schemas.py               # Pydantic response models
 ├── tests/
 │   ├── test_api.py
 │   ├── test_audio_utils.py
 │   └── test_feature_extractor.py
-├── Dockerfile                      # multi-stage, uv-based, python:3.11-slim + libsndfile1 + ffmpeg
+├── scripts/
+│   └── download_ood_test_set.py # streaming OOD dataset fetcher
+├── Dockerfile                   # multi-stage container build
 ├── pyproject.toml
-├── uv.lock
-└── README.md                       # uv sync, train + mlflow ui, docker build, curl examples
+└── README.md
 ```
 
-## 6. Decisions already settled — do not relitigate without a real reason
+## 6. Local Quickstart (Offline Model Execution)
+
+The system automatically loads `models/wav2vec2-base/` when present on disk with `local_files_only=True`, completely avoiding internet requests at runtime.
+
+### 1. Run Tests
+```bash
+uv run pytest tests/ -v
+```
+
+### 2. Train & Evaluate
+```bash
+uv run python -m src.train
+```
+- Extracts Layer 6 embeddings from `data/train_val/`.
+- Trains `StandardScaler + LogisticRegression`.
+- Evaluates on `data/ood_test/` and logs metrics to local MLflow.
+- Saves `models/gender_classifier.joblib`.
+
+### 3. Inspect Experiments (Optional)
+```bash
+uv run mlflow ui
+```
+
+### 4. Run the API Server
+```bash
+uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
+- Swagger UI docs: [http://localhost:8000/docs](http://localhost:8000/docs)
+- Health check: `GET http://localhost:8000/health`
+
+### 5. Send a Prediction Request
+```bash
+curl -X POST "http://localhost:8000/v1/predict-gender" \
+  -H "accept: application/json" \
+  -F "file=@data/ood_test/male/1.wav"
+```
+
+## 7. Decisions already settled — do not relitigate without a real reason
 
 - MLflow is training-only — never a serving dependency.
 - LogisticRegression over LightGBM — interpretability + overfitting risk on a near-linearly-
@@ -161,3 +203,4 @@ Source dataset: [Gender Recognition by Voice (original)](https://www.kaggle.com/
 - No noise-reduction heuristic anywhere in the audio pipeline.
 - Two physically separate datasets — one for train/val, one exclusively for OOD testing.
 - wav2vec2 backbone is frozen — no fine-tuning, no GPU dependency.
+- Backbone model and processor are stored locally in `models/wav2vec2-base/` for offline execution.
