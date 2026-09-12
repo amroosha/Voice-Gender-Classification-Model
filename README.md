@@ -1,8 +1,7 @@
 # Voice Gender Classification Microservice
 
-A production-grade machine learning microservice that classifies gender from raw speech audio. The architecture transforms continuous raw acoustic waveforms into self-supervised transformer representations using a frozen Wav2Vec 2.0 backbone, followed by a calibrated, cost-sensitive classification pipeline served via an asynchronous FastAPI backend.
+A production-grade machine learning microservice that classifies gender from raw speech audio. The architecture transforms continuous raw waveforms into self-supervised transformer representations using a frozen Wav2Vec 2.0 backbone, followed by a calibrated, efficient classification pipeline served via an asynchronous FastAPI backend.
 
-This project is engineered as an end-to-end MLOps template demonstrating sound architectural separation: decoupled training and serving lifecycles, rigorous out-of-distribution evaluation, resilient audio decoding, experiment tracking with MLflow, and zero-network cold starts via containerization.
 
 ---
 
